@@ -72,16 +72,29 @@ func (h *Hook) Fire(entry *logrus.Entry) error {
 		return nil
 	}
 
-	// TODO(axw) send an exception instead or as well if the entry contains an error?
 	errlog := tracer.NewErrorLog(apm.ErrorLogRecord{
 		Message: entry.Message,
 		Level:   entry.Level.String(),
 	})
 	errlog.Timestamp = entry.Time
-	// TODO(axw) look for trace context in entry.Data, associate with errlog.
 	errlog.SetStacktrace(1)
-	errlog.Send()
 
+	// TODO(axw) if entry.Data includes an error, include it in the reported error.
+
+	// Extract trace context added with apmlogrus.TraceContext,
+	// and include it in the reported error.
+	if traceID, ok := entry.Data[FieldTraceID].(apm.TraceID); ok {
+		errlog.TraceID = traceID
+	}
+	if transactionID, ok := entry.Data[FieldTransactionID].(apm.SpanID); ok {
+		errlog.TransactionID = transactionID
+		errlog.ParentID = transactionID
+	}
+	if spanID, ok := entry.Data[FieldSpanID].(apm.SpanID); ok {
+		errlog.ParentID = spanID
+	}
+
+	errlog.Send()
 	if entry.Level == logrus.FatalLevel {
 		// In its default configuration, logrus will exit the process
 		// following a fatal log message, so we flush the tracer.
