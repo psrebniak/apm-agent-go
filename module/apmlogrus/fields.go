@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/sirupsen/logrus"
+
 	"go.elastic.co/apm"
 )
 

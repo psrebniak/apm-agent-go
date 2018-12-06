@@ -40,7 +40,6 @@ func TestHook(t *testing.T) {
 	assert.Equal(t, "TestHook", err0.Culprit)
 	assert.NotEmpty(t, err0.Log.Stacktrace)
 	assert.Equal(t, model.Time(time.Unix(0, 0).UTC()), err0.Timestamp)
-	assert.Zero(t, err0.ID) // XXX check if this is a problem
 	assert.Zero(t, err0.ParentID)
 	assert.Zero(t, err0.TraceID)
 	assert.Zero(t, err0.TransactionID)
@@ -70,6 +69,15 @@ func TestHookTransactionTraceContext(t *testing.T) {
 	assert.Equal(t, payloads.Spans[0].ID, err0.ParentID)
 	assert.Equal(t, payloads.Transactions[0].TraceID, err0.TraceID)
 	assert.Equal(t, payloads.Transactions[0].ID, err0.TransactionID)
+}
+
+func TestHookTracerClosed(t *testing.T) {
+	tracer, _ := transporttest.NewRecorderTracer()
+	tracer.Close() // close it straight away, hook should return immediately
+
+	logger := newLogger(ioutil.Discard)
+	logger.AddHook(&apmlogrus.Hook{Tracer: tracer})
+	logger.Error("boom")
 }
 
 func newLogger(w io.Writer) *logrus.Logger {
