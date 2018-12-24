@@ -120,12 +120,12 @@ func TestErrorAutoStackTraceReuse(t *testing.T) {
 
 func TestCaptureErrorNoTransaction(t *testing.T) {
 	// When there's no transaction or span in the context,
-	// CaptureError returns nil as it has no tracer with
+	// CaptureError returns Error with nil ErrorData as it has no tracer with
 	// which it can create the error.
 	e := apm.CaptureError(context.Background(), errors.New("boom"))
-	assert.Nil(t, e)
+	assert.Nil(t, e.ErrorData)
 
-	// Send is a no-op on a nil Error.
+	// Send is a no-op on a Error with nil ErrorData.
 	e.Send()
 }
 
@@ -193,6 +193,35 @@ func TestErrorTransactionSampledNoTransaction(t *testing.T) {
 
 func assertErrorTransactionSampled(t *testing.T, e model.Error, sampled bool) {
 	assert.Equal(t, &sampled, e.Transaction.Sampled)
+}
+
+func TestErrorCauserInterface(t *testing.T) {
+	type Causer interface {
+		Cause() error
+	}
+	var e Causer = apm.CaptureError(context.Background(), errors.New("boom"))
+	assert.EqualError(t, e.Cause(), "boom")
+}
+
+func TestErrorNilCauser(t *testing.T) {
+	var e *apm.Error
+	assert.Nil(t, e.Cause())
+
+	e = &apm.Error{}
+	assert.Nil(t, e.Cause())
+}
+
+func TestErrorErrorInterface(t *testing.T) {
+	var e error = apm.CaptureError(context.Background(), errors.New("boom"))
+	assert.EqualError(t, e, "boom")
+}
+
+func TestErrorNilError(t *testing.T) {
+	var e *apm.Error
+	assert.EqualError(t, e, "[EMPTY]")
+
+	e = &apm.Error{}
+	assert.EqualError(t, e, "[EMPTY]")
 }
 
 func makeError(msg string) error {

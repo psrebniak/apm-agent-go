@@ -88,7 +88,7 @@ func (t *Tracer) NewError(err error) *Error {
 	if err == nil {
 		panic("NewError must be called with a non-nil error")
 	}
-	e := t.newError()
+	e := t.newError(err)
 	rand.Read(e.ID[:]) // ignore error, can't do anything about it
 	initException(&e.exception, err)
 	initStacktrace(e, err)
@@ -106,7 +106,7 @@ func (t *Tracer) NewError(err error) *Error {
 //
 // If r.Message is empty, "[EMPTY]" will be used.
 func (t *Tracer) NewErrorLog(r ErrorLogRecord) *Error {
-	e := t.newError()
+	e := t.newError(r.Error)
 	e.log = ErrorLogRecord{
 		Message:       truncateString(r.Message),
 		MessageFormat: truncateString(r.MessageFormat),
@@ -126,7 +126,7 @@ func (t *Tracer) NewErrorLog(r ErrorLogRecord) *Error {
 }
 
 // newError returns a new Error associated with the Tracer.
-func (t *Tracer) newError() *Error {
+func (t *Tracer) newError(err error) *Error {
 	e, _ := t.errorDataPool.Get().(*ErrorData)
 	if e == nil {
 		e = &ErrorData{
@@ -142,7 +142,10 @@ func (t *Tracer) newError() *Error {
 	e.Context.captureHeaders = t.captureHeaders
 	t.captureHeadersMu.RUnlock()
 
-	return &Error{ErrorData: e}
+	return &Error{
+		ErrorData: e,
+		cause:     err,
+	}
 }
 
 // Error describes an error occurring in the monitored service.
@@ -150,6 +153,11 @@ type Error struct {
 	// ErrorData holds the error data. This field is set to nil when
 	// the error's Send method is called.
 	*ErrorData
+
+	// cause holds original error.
+	// It is accessible by Cause method
+	// https://godoc.org/github.com/pkg/errors#Cause
+	cause error
 }
 
 // ErrorData holds the details for an error, and is embedded inside Error.
@@ -216,6 +224,25 @@ func (e *Error) SetTransaction(tx *Transaction) {
 		e.setTransactionData(tx.TransactionData)
 	}
 	tx.mu.RUnlock()
+}
+
+// Cause returns original error assigned to Error, nil if Error or Error.cause is nil.
+// https://godoc.org/github.com/pkg/errors#Cause
+func (e *Error) Cause() error {
+	if e != nil {
+		return e.cause
+	}
+	return nil
+}
+
+// Error returns string message for error.
+// if Error or Error.cause is nil, "[EMPTY]" will be used.
+func (e *Error) Error() string {
+	if e != nil && e.cause != nil {
+		return e.cause.Error()
+	}
+
+	return "[EMPTY]"
 }
 
 func (e *Error) setTransactionData(td *TransactionData) {
