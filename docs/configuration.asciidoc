@@ -157,7 +157,7 @@ introduced with the 6.4 release.
 | `ELASTIC_APM_ACTIVE` | true    | `false`
 |============
 
-Enable or disable the tracer. If set to false, then the Go agent does not send
+Enable or disable the agent. If set to false, then the Go agent does not send
 any data to the Elastic APM server, and instrumentation overhead is minimized.
 
 [float]
@@ -187,11 +187,27 @@ Prefixing a pattern with `(?-i)` makes the matching case sensitive.
 | `ELASTIC_APM_SANITIZE_FIELD_NAMES` | `password, passwd, pwd, secret, *key, *token*, *session*, *credit*, *card*, authorization, set-cookie` | `sekrits`
 |============
 
-A list of patterns to match the names of HTTP cookies and POST form fields to refact.
+A list of patterns to match the names of HTTP headers, cookies, and POST form fields to redact.
 
 This option supports the wildcard `*`, which matches zero or more characters.
 Examples: `/foo/*/bar/*/baz*`, `*foo*`. Matching is case insensitive by default.
 Prefixing a pattern with `(?-i)` makes the matching case sensitive.
+
+[float]
+[[config-capture-headers]]
+=== `ELASTIC_APM_CAPTURE_HEADERS`
+
+[options="header"]
+|============
+| Environment                   | Default
+| `ELASTIC_APM_CAPTURE_HEADERS` | `true`
+|============
+
+For transactions that are HTTP requests, the Go agent can optionally capture request and response headers.
+
+Possible values: `true`, `false`.
+
+Captured headers are subject to sanitization, per <<config-sanitize-field-names>>.
 
 [float]
 [[config-capture-body]]
@@ -314,6 +330,18 @@ By default, the agent will sample every transaction (e.g. request to your servic
 To reduce overhead and storage requirements, you can set the sample rate to a value
 between `0.0` and `1.0`. We still record overall time and the result for unsampled
 transactions, but no context information, tags, or spans.
+
+[float]
+[[config-metrics-interval]]
+=== `ELASTIC_APM_METRICS_INTERVAL`
+
+[options="header"]
+|============
+| Environment                     | Default
+| `ELASTIC_APM_METRICS_INTERVAL`  | 30s
+|============
+
+The interval at which APM agent gathers and reports metrics. Set to `0s` to disable.
 
 [float]
 [[config-server-cert]]

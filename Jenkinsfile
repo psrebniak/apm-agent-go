@@ -1,9 +1,11 @@
 #!/usr/bin/env groovy
 
 pipeline {
-  agent none
+  agent any
   environment {
     BASE_DIR="src/go.elastic.co/apm"
+    NOTIFY_TO = credentials('notify-to')
+    JOB_GCS_BUCKET = credentials('gcs-bucket')
   }
   options {
     timeout(time: 1, unit: 'HOURS')
@@ -14,7 +16,7 @@ pipeline {
     durabilityHint('PERFORMANCE_OPTIMIZED')
   }
   parameters {
-    string(name: 'GO_VERSION', defaultValue: "1.10.3", description: "Go version to use.")
+    string(name: 'GO_VERSION', defaultValue: "1.11.4", description: "Go version to use.")
     booleanParam(name: 'Run_As_Master_Branch', defaultValue: false, description: 'Allow to run any steps on a PR, some steps normally only run on master branch.')
     booleanParam(name: 'test_ci', defaultValue: true, description: 'Enable test')
     booleanParam(name: 'docker_test_ci', defaultValue: true, description: 'Enable run docker tests')
@@ -46,11 +48,10 @@ pipeline {
         */
         stage('build') {
           steps {
-            withEnvWrapper() {
-              unstash 'source'
-              dir("${BASE_DIR}"){
-                sh './scripts/jenkins/build.sh'
-              }
+            deleteDir()
+            unstash 'source'
+            dir("${BASE_DIR}"){
+              sh './scripts/jenkins/build.sh'
             }
           }
         }
@@ -76,11 +77,10 @@ pipeline {
             expression { return params.test_ci }
           }
           steps {
-            withEnvWrapper() {
-              unstash 'source'
-              dir("${BASE_DIR}"){
-                sh './scripts/jenkins/test.sh'
-              }
+            deleteDir()
+            unstash 'source'
+            dir("${BASE_DIR}"){
+              sh './scripts/jenkins/test.sh'
             }
           }
           post {
@@ -120,12 +120,11 @@ pipeline {
             }
           }
           steps {
-            withEnvWrapper() {
-              unstash 'source'
-              dir("${BASE_DIR}"){
-                sh './scripts/jenkins/bench.sh'
-                sendBenchmarks(file: 'build/bench.out', index: "benchmark-go")
-              }
+            deleteDir()
+            unstash 'source'
+            dir("${BASE_DIR}"){
+              sh './scripts/jenkins/bench.sh'
+              sendBenchmarks(file: 'build/bench.out', index: "benchmark-go")
             }
           }
           post {
@@ -153,11 +152,10 @@ pipeline {
             expression { return params.docker_test_ci }
           }
           steps {
-            withEnvWrapper() {
-              unstash 'source'
-              dir("${BASE_DIR}"){
-                sh './scripts/jenkins/docker-test.sh'
-              }
+            deleteDir()
+            unstash 'source'
+            dir("${BASE_DIR}"){
+              sh './scripts/jenkins/docker-test.sh'
             }
           }
           post {
@@ -166,7 +164,7 @@ pipeline {
               junit(allowEmptyResults: true,
                 keepLongStdio: true,
                 testResults: "${BASE_DIR}/build/junit-*.xml")
-              codecov(repo: 'apm-agent-go', basedir: "${BASE_DIR}")
+              codecov(repo: 'apm-agent-go', basedir: "${BASE_DIR}", flags: "-f build/coverage/coverage.cov -X search")
             }
           }
         }
@@ -201,14 +199,13 @@ pipeline {
         }
       }
       steps {
-        withEnvWrapper() {
-          unstash 'source'
-          checkoutElasticDocsTools(basedir: "${ELASTIC_DOCS}")
-          dir("${BASE_DIR}"){
-            sh """#!/bin/bash
-            make docs
-            """
-          }
+        deleteDir()
+        unstash 'source'
+        checkoutElasticDocsTools(basedir: "${ELASTIC_DOCS}")
+        dir("${BASE_DIR}"){
+          sh """#!/bin/bash
+          make docs
+          """
         }
       }
       post{
@@ -227,7 +224,7 @@ pipeline {
     }
     failure {
       echoColor(text: '[FAILURE]', colorfg: 'red', colorbg: 'default')
-      //step([$class: 'Mailer', notifyEveryUnstableBuild: true, recipients: "${NOTIFY_TO}", sendToIndividuals: false])
+      step([$class: 'Mailer', notifyEveryUnstableBuild: true, recipients: "${NOTIFY_TO}", sendToIndividuals: false])
     }
     unstable {
       echoColor(text: '[UNSTABLE]', colorfg: 'yellow', colorbg: 'default')

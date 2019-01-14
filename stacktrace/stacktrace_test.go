@@ -1,36 +1,69 @@
+// Licensed to Elasticsearch B.V. under one or more contributor
+// license agreements. See the NOTICE file distributed with
+// this work for additional information regarding copyright
+// ownership. Elasticsearch B.V. licenses this file to you under
+// the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package stacktrace_test
 
 import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/stretchr/testify/require"
 
 	"go.elastic.co/apm/stacktrace"
 )
 
 func TestStacktrace(t *testing.T) {
 	expect := []string{
-		"go.elastic.co/apm/stacktrace_test.TestStacktrace.func1",
-		"runtime.call32",
+		"go.elastic.co/apm/stacktrace_test.callPanickerDefer",
 		"runtime.gopanic",
 		"go.elastic.co/apm/stacktrace_test.(*panicker).panic",
-		"go.elastic.co/apm/stacktrace_test.TestStacktrace",
+		"go.elastic.co/apm/stacktrace_test.callPanicker",
 	}
-	defer func() {
-		err := recover()
-		if err == nil {
-			t.FailNow()
-		}
-		allFrames := stacktrace.AppendStacktrace(nil, 1, 5)
-		functions := make([]string, len(allFrames))
-		for i, frame := range allFrames {
-			functions[i] = frame.Function
-		}
-		if diff := cmp.Diff(functions, expect); diff != "" {
-			t.Fatalf("%s", diff)
-		}
-	}()
+
+	ch := make(chan []string)
+	go callPanicker(ch)
+	functions := <-ch
+	require.NotNil(t, functions)
+	if diff := cmp.Diff(expect, functions); diff != "" {
+		t.Fatalf("%s", diff)
+	}
+}
+
+func callPanicker(ch chan<- []string) {
+	defer callPanickerDefer(ch)
 	(&panicker{}).panic()
+}
+
+func callPanickerDefer(ch chan<- []string) {
+	if recover() == nil {
+		ch <- nil
+		return
+	}
+	allFrames := stacktrace.AppendStacktrace(nil, 1, 5)
+	functions := make([]string, 0, len(allFrames))
+	for _, frame := range allFrames {
+		switch frame.Function {
+		case "runtime.call32", "runtime.goexit":
+			// Depending on the Go toolchain version, these may or may not be present.
+		default:
+			functions = append(functions, frame.Function)
+		}
+	}
+	ch <- functions
 }
 
 type panicker struct{}

@@ -1,9 +1,27 @@
+// Licensed to Elasticsearch B.V. under one or more contributor
+// license agreements. See the NOTICE file distributed with
+// this work for additional information regarding copyright
+// ownership. Elasticsearch B.V. licenses this file to you under
+// the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package apm_test
 
 import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 
@@ -135,6 +153,48 @@ func TestErrorLogRecord(t *testing.T) {
 	assert.Equal(t, "makeError", err0.Culprit) // based on exception stacktrace
 }
 
+func TestErrorTransactionSampled(t *testing.T) {
+	_, _, errors := apmtest.WithTransaction(func(ctx context.Context) {
+		apm.CaptureError(ctx, errors.New("boom")).Send()
+
+		span, ctx := apm.StartSpan(ctx, "name", "type")
+		defer span.End()
+		apm.CaptureError(ctx, errors.New("boom")).Send()
+	})
+	assertErrorTransactionSampled(t, errors[0], true)
+	assertErrorTransactionSampled(t, errors[1], true)
+}
+
+func TestErrorTransactionNotSampled(t *testing.T) {
+	tracer, recorder := transporttest.NewRecorderTracer()
+	defer tracer.Close()
+	tracer.SetSampler(apm.NewRatioSampler(0))
+
+	tx := tracer.StartTransaction("name", "type")
+	ctx := apm.ContextWithTransaction(context.Background(), tx)
+	apm.CaptureError(ctx, errors.New("boom")).Send()
+
+	tracer.Flush(nil)
+	payloads := recorder.Payloads()
+	require.Len(t, payloads.Errors, 1)
+	assertErrorTransactionSampled(t, payloads.Errors[0], false)
+}
+
+func TestErrorTransactionSampledNoTransaction(t *testing.T) {
+	tracer, recorder := transporttest.NewRecorderTracer()
+	defer tracer.Close()
+
+	tracer.NewError(errors.New("boom")).Send()
+	tracer.Flush(nil)
+	payloads := recorder.Payloads()
+	require.Len(t, payloads.Errors, 1)
+	assert.Nil(t, payloads.Errors[0].Transaction.Sampled)
+}
+
+func assertErrorTransactionSampled(t *testing.T, e model.Error, sampled bool) {
+	assert.Equal(t, &sampled, e.Transaction.Sampled)
+}
+
 func makeError(msg string) error {
 	return errors.New(msg)
 }
@@ -171,9 +231,33 @@ func (e *errorsStackTracer) StackTrace() errors.StackTrace {
 func newErrorsStackTrace(skip, n int) errors.StackTrace {
 	callers := make([]uintptr, 2)
 	callers = callers[:runtime.Callers(1, callers)]
-	frames := make([]errors.Frame, len(callers))
-	for i, pc := range callers {
-		frames[i] = errors.Frame(pc)
+
+	var (
+		uintptrType      = reflect.TypeOf(uintptr(0))
+		errorsFrameType  = reflect.TypeOf(*new(errors.Frame))
+		runtimeFrameType = reflect.TypeOf(runtime.Frame{})
+	)
+
+	var frames []errors.Frame
+	switch {
+	case errorsFrameType.ConvertibleTo(uintptrType):
+		frames = make([]errors.Frame, len(callers))
+		for i, pc := range callers {
+			reflect.ValueOf(&frames[i]).Elem().Set(reflect.ValueOf(pc).Convert(errorsFrameType))
+		}
+	case errorsFrameType.ConvertibleTo(runtimeFrameType):
+		fs := runtime.CallersFrames(callers)
+		for {
+			var frame errors.Frame
+			runtimeFrame, more := fs.Next()
+			reflect.ValueOf(&frame).Elem().Set(reflect.ValueOf(runtimeFrame).Convert(errorsFrameType))
+			frames = append(frames, frame)
+			if !more {
+				break
+			}
+		}
+	default:
+		panic(fmt.Errorf("unhandled errors.Frame type %s", errorsFrameType))
 	}
 	return errors.StackTrace(frames)
 }

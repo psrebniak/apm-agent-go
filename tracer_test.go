@@ -1,3 +1,20 @@
+// Licensed to Elasticsearch B.V. under one or more contributor
+// license agreements. See the NOTICE file distributed with
+// this work for additional information regarding copyright
+// ownership. Elasticsearch B.V. licenses this file to you under
+// the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package apm_test
 
 import (
@@ -239,18 +256,16 @@ func TestTracerRequestSize(t *testing.T) {
 	os.Setenv("ELASTIC_APM_API_REQUEST_SIZE", "1KB")
 	defer os.Unsetenv("ELASTIC_APM_API_REQUEST_SIZE")
 
-	type times struct {
-		start, end time.Time
-	}
-	requestHandled := make(chan times, 1)
+	// Set the request time to some very long duration,
+	// to highlight the fact that the request size is
+	// the cause of request completion.
+	os.Setenv("ELASTIC_APM_API_REQUEST_TIME", "60s")
+	defer os.Unsetenv("ELASTIC_APM_API_REQUEST_TIME")
+
+	requestHandled := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		serverStart := time.Now()
 		io.Copy(ioutil.Discard, req.Body)
-		serverEnd := time.Now()
-		select {
-		case requestHandled <- times{start: serverStart, end: serverEnd}:
-		default:
-		}
+		requestHandled <- struct{}{}
 	}))
 	defer server.Close()
 
@@ -272,11 +287,13 @@ func TestTracerRequestSize(t *testing.T) {
 		// Yield to the tracer for more predictable timing.
 		runtime.Gosched()
 	}
-	serverTimes := <-requestHandled
+	<-requestHandled
 	clientEnd := time.Now()
-	assert.WithinDuration(t, clientStart, clientEnd, 100*time.Millisecond)
-	assert.WithinDuration(t, clientStart, serverTimes.start, 100*time.Millisecond)
-	assert.WithinDuration(t, clientEnd, serverTimes.end, 100*time.Millisecond)
+	assert.Condition(t, func() bool {
+		// Should be considerably less than 10s, which is
+		// considerably less than the configured 60s limit.
+		return clientEnd.Sub(clientStart) < 10*time.Second
+	})
 }
 
 func TestTracerBufferSize(t *testing.T) {
@@ -409,6 +426,58 @@ func TestTracerKubernetesMetadata(t *testing.T) {
 			},
 		}, system.Kubernetes)
 	})
+}
+
+func TestTracerActive(t *testing.T) {
+	tracer, _ := transporttest.NewRecorderTracer()
+	defer tracer.Close()
+	assert.True(t, tracer.Active())
+
+	// Kick off calls to tracer.Active concurrently
+	// with the tracer.Close, to test that we ensure
+	// there are no data races.
+	go func() {
+		for i := 0; i < 100; i++ {
+			tracer.Active()
+		}
+	}()
+}
+
+func TestTracerCaptureHeaders(t *testing.T) {
+	tracer, recorder := transporttest.NewRecorderTracer()
+	defer tracer.Close()
+
+	req, err := http.NewRequest("GET", "http://testing.invalid", nil)
+	require.NoError(t, err)
+	req.Header.Set("foo", "bar")
+	respHeaders := make(http.Header)
+	respHeaders.Set("baz", "qux")
+
+	for _, enabled := range []bool{false, true} {
+		tracer.SetCaptureHeaders(enabled)
+		tx := tracer.StartTransaction("name", "type")
+		tx.Context.SetHTTPRequest(req)
+		tx.Context.SetHTTPResponseHeaders(respHeaders)
+		tx.Context.SetHTTPStatusCode(202)
+		tx.End()
+	}
+
+	tracer.Flush(nil)
+	payloads := recorder.Payloads()
+	require.Len(t, payloads.Transactions, 2)
+
+	for i, enabled := range []bool{false, true} {
+		tx := payloads.Transactions[i]
+		require.NotNil(t, tx.Context.Request)
+		require.NotNil(t, tx.Context.Response)
+		if enabled {
+			assert.NotNil(t, tx.Context.Request.Headers)
+			assert.NotNil(t, tx.Context.Response.Headers)
+		} else {
+			assert.Nil(t, tx.Context.Request.Headers)
+			assert.Nil(t, tx.Context.Response.Headers)
+		}
+	}
 }
 
 type blockedTransport struct {

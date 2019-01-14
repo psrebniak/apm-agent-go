@@ -1,3 +1,20 @@
+// Licensed to Elasticsearch B.V. under one or more contributor
+// license agreements. See the NOTICE file distributed with
+// this work for additional information regarding copyright
+// ownership. Elasticsearch B.V. licenses this file to you under
+// the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package apm
 
 import (
@@ -8,6 +25,7 @@ import (
 	"log"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.elastic.co/apm/internal/apmconfig"
@@ -56,6 +74,7 @@ type options struct {
 	metricsBufferSize     int
 	sampler               Sampler
 	sanitizedFieldNames   wildcard.Matchers
+	captureHeaders        bool
 	captureBody           CaptureBodyMode
 	spanFramesMinDuration time.Duration
 	serviceName           string
@@ -113,6 +132,11 @@ func (opts *options) init(continueOnError bool) error {
 		sampler = nil
 	}
 
+	captureHeaders, err := initialCaptureHeaders()
+	if failed(err) {
+		captureHeaders = defaultCaptureHeaders
+	}
+
 	captureBody, err := initialCaptureBody()
 	if failed(err) {
 		captureBody = CaptureBodyOff
@@ -143,6 +167,7 @@ func (opts *options) init(continueOnError bool) error {
 	opts.maxSpans = maxSpans
 	opts.sampler = sampler
 	opts.sanitizedFieldNames = initialSanitizedFieldNames()
+	opts.captureHeaders = captureHeaders
 	opts.captureBody = captureBody
 	opts.spanFramesMinDuration = spanFramesMinDuration
 	opts.serviceName, opts.serviceVersion, opts.serviceEnvironment = initialService()
@@ -180,7 +205,7 @@ type Tracer struct {
 	process *model.Process
 	system  *model.System
 
-	active            bool
+	active            int32
 	bufferSize        int
 	metricsBufferSize int
 	closing           chan struct{}
@@ -203,6 +228,9 @@ type Tracer struct {
 
 	samplerMu sync.RWMutex
 	sampler   Sampler
+
+	captureHeadersMu sync.RWMutex
+	captureHeaders   bool
 
 	captureBodyMu sync.RWMutex
 	captureBody   CaptureBodyMode
@@ -247,11 +275,12 @@ func newTracer(opts options) *Tracer {
 		transactions:          make(chan *TransactionData, transactionsChannelCap),
 		spans:                 make(chan *SpanData, spansChannelCap),
 		errors:                make(chan *ErrorData, errorsChannelCap),
+		active:                1,
 		maxSpans:              opts.maxSpans,
 		sampler:               opts.sampler,
+		captureHeaders:        opts.captureHeaders,
 		captureBody:           opts.captureBody,
 		spanFramesMinDuration: opts.spanFramesMinDuration,
-		active:                opts.active,
 		bufferSize:            opts.bufferSize,
 		metricsBufferSize:     opts.metricsBufferSize,
 	}
@@ -259,7 +288,8 @@ func newTracer(opts options) *Tracer {
 	t.Service.Version = opts.serviceVersion
 	t.Service.Environment = opts.serviceEnvironment
 
-	if !t.active {
+	if !opts.active {
+		t.active = 0
 		close(t.closed)
 		return t
 	}
@@ -325,7 +355,7 @@ func (t *Tracer) Flush(abort <-chan struct{}) {
 // Active reports whether the tracer is active. If the tracer is inactive,
 // no transactions or errors will be sent to the Elastic APM server.
 func (t *Tracer) Active() bool {
-	return t.active
+	return atomic.LoadInt32(&t.active) == 1
 }
 
 // SetRequestDuration sets the maximum amount of time to keep a request open
@@ -445,6 +475,13 @@ func (t *Tracer) SetSpanFramesMinDuration(d time.Duration) {
 	t.spanFramesMinDurationMu.Unlock()
 }
 
+// SetCaptureHeaders enables or disables capturing of HTTP headers.
+func (t *Tracer) SetCaptureHeaders(capture bool) {
+	t.captureHeadersMu.Lock()
+	t.captureHeaders = capture
+	t.captureHeadersMu.Unlock()
+}
+
 // SetCaptureBody sets the HTTP request body capture mode.
 func (t *Tracer) SetCaptureBody(mode CaptureBodyMode) {
 	t.captureBodyMu.Lock()
@@ -481,7 +518,7 @@ func (t *Tracer) loop() {
 	ctx, cancelContext := context.WithCancel(context.Background())
 	defer cancelContext()
 	defer close(t.closed)
-	defer func() { t.active = false }()
+	defer atomic.StoreInt32(&t.active, 0)
 
 	var req iochan.ReadRequest
 	var requestBuf bytes.Buffer

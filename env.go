@@ -1,3 +1,20 @@
+// Licensed to Elasticsearch B.V. under one or more contributor
+// license agreements. See the NOTICE file distributed with
+// this work for additional information regarding copyright
+// ownership. Elasticsearch B.V. licenses this file to you under
+// the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package apm
 
 import (
@@ -19,6 +36,7 @@ const (
 	envMaxSpans              = "ELASTIC_APM_TRANSACTION_MAX_SPANS"
 	envTransactionSampleRate = "ELASTIC_APM_TRANSACTION_SAMPLE_RATE"
 	envSanitizeFieldNames    = "ELASTIC_APM_SANITIZE_FIELD_NAMES"
+	envCaptureHeaders        = "ELASTIC_APM_CAPTURE_HEADERS"
 	envCaptureBody           = "ELASTIC_APM_CAPTURE_BODY"
 	envServiceName           = "ELASTIC_APM_SERVICE_NAME"
 	envServiceVersion        = "ELASTIC_APM_SERVICE_VERSION"
@@ -36,6 +54,7 @@ const (
 	defaultMetricsBufferSize     = 100 * apmconfig.KByte
 	defaultMetricsInterval       = 30 * time.Second
 	defaultMaxSpans              = 500
+	defaultCaptureHeaders        = true
 	defaultCaptureBody           = CaptureBodyOff
 	defaultSpanFramesMinDuration = 5 * time.Millisecond
 
@@ -146,6 +165,10 @@ func initialSampler() (Sampler, error) {
 
 func initialSanitizedFieldNames() wildcard.Matchers {
 	return apmconfig.ParseWildcardPatternsEnv(envSanitizeFieldNames, defaultSanitizedFieldNames)
+}
+
+func initialCaptureHeaders() (bool, error) {
+	return apmconfig.ParseBoolEnv(envCaptureHeaders, defaultCaptureHeaders)
 }
 
 func initialCaptureBody() (CaptureBodyMode, error) {

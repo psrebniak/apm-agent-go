@@ -1,3 +1,20 @@
+// Licensed to Elasticsearch B.V. under one or more contributor
+// license agreements. See the NOTICE file distributed with
+// this work for additional information regarding copyright
+// ownership. Elasticsearch B.V. licenses this file to you under
+// the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package model_test
 
 import (
@@ -180,6 +197,18 @@ func TestMarshalError(t *testing.T) {
 		`{"id":"000102030405060708090a0b0c0d0e0f","timestamp":123000000,"parent_id":"0102030405060708","trace_id":"0102030405060708090a0b0c0d0e0f10","transaction_id":"0102030405060708"}`,
 		string(w.Bytes()),
 	)
+}
+
+func TestMarshalErrorTransactionUnsampled(t *testing.T) {
+	var e model.Error
+	time, err := time.Parse("2006-01-02T15:04:05.999Z", "1970-01-01T00:02:03Z")
+	assert.NoError(t, err)
+	e.Timestamp = model.Time(time)
+	e.Transaction.Sampled = new(bool)
+
+	var w fastjson.Writer
+	e.MarshalFastJSON(&w)
+	assert.Equal(t, `{"id":"00000000000000000000000000000000","timestamp":123000000,"transaction":{"sampled":false}}`, string(w.Bytes()))
 }
 
 func TestMarshalCookies(t *testing.T) {

@@ -1,12 +1,29 @@
+// Licensed to Elasticsearch B.V. under one or more contributor
+// license agreements. See the NOTICE file distributed with
+// this work for additional information regarding copyright
+// ownership. Elasticsearch B.V. licenses this file to you under
+// the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package apm_test
 
 import (
+	"context"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.elastic.co/apm"
+	"go.elastic.co/apm/apmtest"
 	"go.elastic.co/apm/model"
 	"go.elastic.co/apm/module/apmhttp"
 	"go.elastic.co/apm/transport"
@@ -26,11 +44,8 @@ func TestTracerRequestTimeEnv(t *testing.T) {
 	defer os.Unsetenv("ELASTIC_APM_API_REQUEST_TIME")
 
 	requestHandled := make(chan struct{}, 1)
-	var serverStart, serverEnd time.Time
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		serverStart = time.Now()
 		io.Copy(ioutil.Discard, req.Body)
-		serverEnd = time.Now()
 		requestHandled <- struct{}{}
 	}))
 	defer server.Close()
@@ -46,16 +61,11 @@ func TestTracerRequestTimeEnv(t *testing.T) {
 	tracer.Transport = httpTransport
 
 	clientStart := time.Now()
-	for i := 0; i < 1000; i++ {
-		tracer.StartTransaction("name", "type").End()
-		// Yield to the tracer for more predictable timing.
-		runtime.Gosched()
-	}
+	tracer.StartTransaction("name", "type").End()
 	<-requestHandled
 	clientEnd := time.Now()
-	assert.WithinDuration(t, clientStart.Add(time.Second), clientEnd, 100*time.Millisecond)
-	assert.WithinDuration(t, clientStart, serverStart, 100*time.Millisecond)
-	assert.WithinDuration(t, clientEnd, serverEnd, 100*time.Millisecond)
+
+	assert.WithinDuration(t, clientStart.Add(time.Second), clientEnd, 200*time.Millisecond)
 }
 
 func TestTracerRequestTimeEnvInvalid(t *testing.T) {
@@ -270,7 +280,7 @@ func TestTracerSpanFramesMinDurationEnvInvalid(t *testing.T) {
 	assert.EqualError(t, err, "failed to parse ELASTIC_APM_SPAN_FRAMES_MIN_DURATION: invalid duration aeon")
 }
 
-func TestTracerActive(t *testing.T) {
+func TestTracerActiveEnv(t *testing.T) {
 	os.Setenv("ELASTIC_APM_ACTIVE", "false")
 	defer os.Unsetenv("ELASTIC_APM_ACTIVE")
 
@@ -285,7 +295,7 @@ func TestTracerActive(t *testing.T) {
 	assert.Zero(t, transport.Payloads())
 }
 
-func TestTracerActiveInvalid(t *testing.T) {
+func TestTracerActiveEnvInvalid(t *testing.T) {
 	os.Setenv("ELASTIC_APM_ACTIVE", "yep")
 	defer os.Unsetenv("ELASTIC_APM_ACTIVE")
 
@@ -305,4 +315,27 @@ func TestTracerEnvironmentEnv(t *testing.T) {
 
 	_, _, service := transport.Metadata()
 	assert.Equal(t, "friendly", service.Environment)
+}
+
+func TestTracerCaptureHeadersEnv(t *testing.T) {
+	os.Setenv("ELASTIC_APM_CAPTURE_HEADERS", "false")
+	defer os.Unsetenv("ELASTIC_APM_CAPTURE_HEADERS")
+
+	tx, _, _ := apmtest.WithTransaction(func(ctx context.Context) {
+		req, err := http.NewRequest("GET", "http://testing.invalid", nil)
+		require.NoError(t, err)
+		req.Header.Set("foo", "bar")
+		respHeaders := make(http.Header)
+		respHeaders.Set("baz", "qux")
+
+		tx := apm.TransactionFromContext(ctx)
+		tx.Context.SetHTTPRequest(req)
+		tx.Context.SetHTTPResponseHeaders(respHeaders)
+		tx.Context.SetHTTPStatusCode(202)
+	})
+
+	require.NotNil(t, tx.Context.Request)
+	require.NotNil(t, tx.Context.Response)
+	assert.Nil(t, tx.Context.Request.Headers)
+	assert.Nil(t, tx.Context.Response.Headers)
 }

@@ -1,3 +1,20 @@
+// Licensed to Elasticsearch B.V. under one or more contributor
+// license agreements. See the NOTICE file distributed with
+// this work for additional information regarding copyright
+// ownership. Elasticsearch B.V. licenses this file to you under
+// the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package apm
 
 import (
@@ -6,12 +23,21 @@ import (
 	"net"
 	"os"
 	"reflect"
+	"runtime"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/pkg/errors"
 
 	"go.elastic.co/apm/stacktrace"
+)
+
+var (
+	uintptrType             = reflect.TypeOf(uintptr(0))
+	runtimeFrameType        = reflect.TypeOf(runtime.Frame{})
+	errorsStackTraceUintptr = uintptrType.ConvertibleTo(reflect.TypeOf(*new(errors.Frame)))
+	errorsStackTraceFrame   = reflect.TypeOf(*new(errors.Frame)).ConvertibleTo(runtimeFrameType)
 )
 
 // Recovered creates an Error with t.NewError(err), where
@@ -111,6 +137,11 @@ func (t *Tracer) newError() *Error {
 		}
 	}
 	e.Timestamp = time.Now()
+
+	t.captureHeadersMu.RLock()
+	e.Context.captureHeaders = t.captureHeaders
+	t.captureHeadersMu.RUnlock()
+
 	return &Error{ErrorData: e}
 }
 
@@ -124,10 +155,11 @@ type Error struct {
 // ErrorData holds the details for an error, and is embedded inside Error.
 // When the error is sent, its ErrorData field will be set to nil.
 type ErrorData struct {
-	tracer     *Tracer
-	stacktrace []stacktrace.Frame
-	exception  exceptionData
-	log        ErrorLogRecord
+	tracer             *Tracer
+	stacktrace         []stacktrace.Frame
+	exception          exceptionData
+	log                ErrorLogRecord
+	transactionSampled bool
 
 	// exceptionStacktraceFrames holds the number of stacktrace
 	// frames for the exception; stacktrace may hold frames for
@@ -190,6 +222,7 @@ func (e *Error) setTransactionData(td *TransactionData) {
 	e.TraceID = td.traceContext.Trace
 	e.ParentID = td.traceContext.Span
 	e.TransactionID = e.ParentID
+	e.transactionSampled = td.traceContext.Options.Recorded()
 }
 
 // SetSpan sets TraceID, TransactionID, and ParentID to the span's IDs. If you call
@@ -208,6 +241,7 @@ func (e *Error) setSpanData(s *SpanData) {
 	e.TraceID = s.traceContext.Trace
 	e.ParentID = s.traceContext.Span
 	e.TransactionID = s.transactionID
+	e.transactionSampled = true // by virtue of there being a span
 }
 
 // Send enqueues the error for sending to the Elastic APM server.
@@ -355,12 +389,26 @@ func initStacktrace(e *Error, err error) {
 	case internalStackTracer:
 		e.stacktrace = append(e.stacktrace[:0], stackTracer.StackTrace()...)
 	case errorsStackTracer:
+		// github.com/pkg/errors 0.8.x and earlier represent
+		// stack frames as uintptr; 0.9.0 and later represent
+		// them as runtime.Frames.
+		//
+		// TODO(axw) drop support for older github.com/pkg/errors
+		// versions when we release go.elastic.co/apm v2.0.0.
 		stackTrace := stackTracer.StackTrace()
-		pc := make([]uintptr, len(stackTrace))
-		for i, frame := range stackTrace {
-			pc[i] = uintptr(frame)
+		if errorsStackTraceUintptr {
+			pc := make([]uintptr, len(stackTrace))
+			for i, frame := range stackTrace {
+				pc[i] = *(*uintptr)(unsafe.Pointer(&frame))
+			}
+			e.stacktrace = stacktrace.AppendCallerFrames(e.stacktrace[:0], pc, -1)
+		} else if errorsStackTraceFrame {
+			e.stacktrace = e.stacktrace[:0]
+			for _, frame := range stackTrace {
+				rf := (*runtime.Frame)(unsafe.Pointer(&frame))
+				e.stacktrace = append(e.stacktrace, stacktrace.RuntimeFrame(*rf))
+			}
 		}
-		e.stacktrace = stacktrace.AppendCallerFrames(e.stacktrace[:0], pc, -1)
 	}
 }
 

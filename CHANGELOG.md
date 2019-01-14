@@ -1,6 +1,22 @@
 # Changelog
 
-## [Unreleased](https://github.com/elastic/apm-agent-go/compare/v1.1.1...master)
+## [Unreleased](https://github.com/elastic/apm-agent-go/compare/v1.1.3...master)
+
+ - Add "transaction.sampled" to errors (#410)
+ - Enforce license header in source files with go-licenser (#411)
+ - module/apmot: ignore "follows-from" span references (#414)
+ - module/apmot: report error log records (#415)
+ - Introduce `ELASTIC_APM_CAPTURE_HEADERS` to control HTTP header capture (#418)
+ - module/apmzap: introduce zap log correlation and exception-tracking hook (#426)
+
+## [v1.1.3](https://github.com/elastic/apm-agent-go/releases/tag/v1.1.3)
+
+ - Remove the `agent.*` metrics (#407)
+ - Add support for new github.com/pkg/errors.Frame type (#409)
+
+## [v1.1.2](https://github.com/elastic/apm-agent-go/releases/tag/v1.1.2)
+
+ - Fix data race between Tracer.Active and Tracer.loop (#406)
 
 ## [v1.1.1](https://github.com/elastic/apm-agent-go/releases/tag/v1.1.1)
 
