@@ -89,6 +89,7 @@ func (t *Tracer) NewError(err error) *Error {
 		panic("NewError must be called with a non-nil error")
 	}
 	e := t.newError(err)
+	e.err = err.Error()
 	rand.Read(e.ID[:]) // ignore error, can't do anything about it
 	initException(&e.exception, err)
 	initStacktrace(e, err)
@@ -116,6 +117,7 @@ func (t *Tracer) NewErrorLog(r ErrorLogRecord) *Error {
 	if e.log.Message == "" {
 		e.log.Message = "[EMPTY]"
 	}
+	e.err = e.log.Message
 	rand.Read(e.ID[:]) // ignore error, can't do anything about it
 	if r.Error != nil {
 		initException(&e.exception, r.Error)
@@ -158,6 +160,9 @@ type Error struct {
 	// It is accessible by Cause method
 	// https://godoc.org/github.com/pkg/errors#Cause
 	cause error
+
+	// string holds original error string
+	err string
 }
 
 // ErrorData holds the details for an error, and is embedded inside Error.
@@ -238,10 +243,9 @@ func (e *Error) Cause() error {
 // Error returns string message for error.
 // if Error or Error.cause is nil, "[EMPTY]" will be used.
 func (e *Error) Error() string {
-	if e != nil && e.cause != nil {
-		return e.cause.Error()
+	if e != nil {
+		return e.err
 	}
-
 	return "[EMPTY]"
 }
 

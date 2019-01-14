@@ -221,7 +221,7 @@ func TestErrorNilError(t *testing.T) {
 	assert.EqualError(t, e, "[EMPTY]")
 
 	e = &apm.Error{}
-	assert.EqualError(t, e, "[EMPTY]")
+	assert.EqualError(t, e, "")
 }
 
 func makeError(msg string) error {
